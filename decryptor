@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""
+NEXUS-CIPHER(TM) v12.0 DECRYPTOR
+Reverses all 18 stages defined in encryptor.py.
+"""
+
+import base64
+import hashlib
+import hmac
+import math
+import os
+
+
+class NexusCipherV12Decryptor:
+    AUTH_KEY = b"NEXUS_V12_AUTH_KEY"
+    MASTER_KEY_FALLBACK = b"NEXUS_V12_MASTER_KEY_FALLBACK_CHANGE_ME"
+
+    def __init__(self):
+        self.original_length = 0
+        self.encryption_timestamp = 0
+
+    @staticmethod
+    def _stage17_inverse(data: bytes) -> bytes:
+        crystal = b"NEXUS"
+        return bytes([b ^ crystal[i % len(crystal)] for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage16_inverse(data: bytes) -> bytes:
+        key = hashlib.sha256(b"NEXUS_STAGE16_FIXED_KEY_V12").digest()
+        result = data
+        for _ in range(3):
+            result = bytes([b ^ key[i % len(key)] for i, b in enumerate(result)])
+        return result
+
+    @staticmethod
+    def _method_c_inverse(data: bytes) -> bytes:
+        result = []
+        carry = 0xAB
+        for i, shifted in enumerate(data):
+            original = (shifted - carry - i * 7) % 256
+            result.append(original)
+            carry = (shifted ^ original ^ 0x55) & 0xFF
+        return bytes(result)
+
+    @staticmethod
+    def _method4_inverse(data: bytes) -> bytes:
+        result = []
+        for b in data:
+            upper = (b >> 4) & 0xF
+            lower = b & 0xF
+            upper = ((upper << 1) | (upper >> 3)) & 0xF
+            lower = ((lower >> 1) | (lower << 3)) & 0xF
+            result.append((upper << 4) | lower)
+        return bytes(result)
+
+    @staticmethod
+    def _method_d_inverse(data: bytes) -> bytes:
+        # XOR is self-inverse. Reverse key order for true inverse pipeline.
+        keys = [b"NEXUS_D_K3", b"NEXUS_D_K2", b"NEXUS_D_K1"]
+        result = data
+        for key in keys:
+            result = bytes([b ^ key[i % len(key)] for i, b in enumerate(result)])
+        return result
+
+    @staticmethod
+    def _stage15_inverse(data: bytes) -> bytes:
+        key = b"HYPERDIMENSIONAL_NEXUS_CIPHER"
+        return bytes([(b - key[i % len(key)]) % 256 for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage14_inverse(data: bytes) -> bytes:
+        return bytes([(b - int(math.sin(i) * 50)) % 256 for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage13_inverse(data: bytes) -> bytes:
+        result = []
+        for b in data:
+            if 65 <= b <= 90:
+                result.append(((b - 65 + 13) % 26) + 65)
+            elif 97 <= b <= 122:
+                result.append(((b - 97 + 13) % 26) + 97)
+            else:
+                result.append(b)
+        return bytes(result)
+
+    @staticmethod
+    def _stage12_inverse(data: bytes) -> bytes:
+        key = b"NEXUS_KEY_STAGE_12"
+        return bytes([b ^ key[i % len(key)] for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage11_inverse(data: bytes) -> bytes:
+        return bytes([(b - ((i % 13) + 1) ** 2) % 256 for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage10_inverse(data: bytes) -> bytes:
+        result = []
+        for b in data:
+            reversed_b = 0
+            x = b
+            for _ in range(8):
+                reversed_b = (reversed_b << 1) | (x & 1)
+                x >>= 1
+            result.append(reversed_b)
+        return bytes(result)
+
+    @staticmethod
+    def _stage9_inverse(data: bytes) -> bytes:
+        fib = [1, 1]
+        for _ in range(50):
+            fib.append(fib[-1] + fib[-2])
+        return bytes([(b - fib[i % len(fib)]) % 256 for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage8_inverse(data: bytes) -> bytes:
+        return bytes([255 - b for b in data])
+
+    @staticmethod
+    def _stage7_inverse(data: bytes) -> bytes:
+        key = b"NEXUS_KEY_STAGE_7"
+        return bytes([b ^ key[i % len(key)] for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage6_inverse(data: bytes) -> bytes:
+        # Encryptor adds +1 127 times. Inverse is -1 127 times.
+        return bytes([(b - 127) % 256 for b in data])
+
+    @staticmethod
+    def _stage5_inverse(data: bytes) -> bytes:
+        return base64.b64decode(data)
+
+    @staticmethod
+    def _stage4_inverse(data: bytes) -> bytes:
+        key = b"NEXUS_KEY_STAGE_4"
+        return bytes([b ^ key[i % len(key)] for i, b in enumerate(data)])
+
+    @staticmethod
+    def _stage3_inverse(data: bytes) -> bytes:
+        return data[::-1]
+
+    @staticmethod
+    def _stage2_inverse(data: bytes) -> bytes:
+        result = []
+        for i, b in enumerate(data):
+            shift = i % 8
+            if shift == 0:
+                result.append(b)
+            else:
+                rotated = ((b >> shift) | (b << (8 - shift))) & 0xFF
+                result.append(rotated)
+        return bytes(result)
+
+    @staticmethod
+    def _stage1_inverse(data: bytes) -> bytes:
+        return bytes([(b - i * 7) % 256 for i, b in enumerate(data)])
+
+    def _stage18_inverse(self, sealed: str) -> bytes:
+        parts = sealed.strip().encode("latin-1").split(b"::")
+        if len(parts) == 6 and parts[5] == b"SEALED":
+            self.original_length = int(parts[1], 16)
+            self.encryption_timestamp = int(parts[2].decode("ascii"))
+            nonce = bytes.fromhex(parts[3].decode("ascii"))
+            payload = parts[0] + b"::" + parts[1] + b"::" + parts[2] + b"::" + parts[3]
+            master_key = os.environ.get("NEXUS_MASTER_KEY", "").encode("utf-8") or self.MASTER_KEY_FALLBACK
+            auth_key = hmac.new(master_key, b"AUTH_V13", hashlib.sha256).digest()
+            expected_tag = hmac.new(auth_key, payload, hashlib.sha256).hexdigest().encode()
+            if not hmac.compare_digest(parts[4], expected_tag):
+                raise ValueError("Seal authentication failed")
+            wrapped = base64.b64decode(parts[0], validate=True)
+            return self._xor_with_keystream(wrapped, master_key, nonce)
+        if len(parts) == 5 and parts[4] == b"SEALED":
+            self.original_length = int(parts[1], 16)
+            self.encryption_timestamp = int(parts[2].decode("ascii"))
+            payload = parts[0] + b"::" + parts[1] + b"::" + parts[2]
+            expected_tag = hmac.new(self.AUTH_KEY, payload, hashlib.sha256).hexdigest().encode()
+            if not hmac.compare_digest(parts[3], expected_tag):
+                raise ValueError("Seal authentication failed")
+            return base64.b64decode(parts[0], validate=True)
+        if len(parts) == 4 and parts[3] == b"SEALED":
+            self.original_length = int(parts[1], 16)
+            self.encryption_timestamp = int(parts[2].decode("ascii"))
+            return base64.b64decode(parts[0], validate=True)
+        if len(parts) == 3 and parts[2] == b"SEALED":
+            self.original_length = int(parts[1], 16)
+            self.encryption_timestamp = 0
+            return base64.b64decode(parts[0], validate=True)
+        else:
+            raise ValueError("Invalid sealed message format")
+
+    @staticmethod
+    def _xor_with_keystream(data: bytes, key: bytes, nonce: bytes) -> bytes:
+        out = bytearray()
+        counter = 0
+        while len(out) < len(data):
+            block = hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+            out.extend(block)
+            counter += 1
+        stream = out[:len(data)]
+        return bytes([b ^ stream[i] for i, b in enumerate(data)])
+
+    def decrypt(self, encrypted_text: str) -> str:
+        data = self._stage18_inverse(encrypted_text)
+        data = self._stage17_inverse(data)
+        data = self._stage16_inverse(data)
+        data = self._method_c_inverse(data)
+        data = self._method4_inverse(data)
+        data = self._method_d_inverse(data)
+        data = self._stage15_inverse(data)
+        data = self._stage14_inverse(data)
+        data = self._stage13_inverse(data)
+        data = self._stage12_inverse(data)
+        data = self._stage11_inverse(data)
+        data = self._stage10_inverse(data)
+        data = self._stage9_inverse(data)
+        data = self._stage8_inverse(data)
+        data = self._stage7_inverse(data)
+        data = self._stage6_inverse(data)
+        data = self._stage5_inverse(data)
+        data = self._stage4_inverse(data)
+        data = self._stage3_inverse(data)
+        data = self._stage2_inverse(data)
+        data = self._stage1_inverse(data)
+        candidate = data[: self.original_length] if self.original_length > 0 else data
+        try:
+            return candidate.decode("utf-8")
+        except UnicodeDecodeError:
+            # Backward compatibility: some older encrypted files stored char length.
+            full_text = data.decode("utf-8")
+            if self.original_length > 0 and self.original_length <= len(full_text):
+                return full_text[: self.original_length]
+            return full_text
+
+
+def extract_encrypted_message_from_file(path: str) -> str:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    marker = None
+    for candidate in ("ENCRYPTED MESSAGE:", "ENCRYPTED:"):
+        if candidate in content:
+            marker = candidate
+            break
+    if marker is None:
+        raise ValueError("Could not find 'ENCRYPTED MESSAGE:' or 'ENCRYPTED:' block")
+    idx = content.find(marker)
+    after = content[idx + len(marker):].strip()
+    first_line = after.splitlines()[0].strip()
+    if "::SEALED" not in first_line:
+        raise ValueError("Encrypted message line does not look sealed")
+    return first_line
+
+
+def normalize_ciphertext_input(raw: str) -> str:
+    s = raw.strip()
+    if not s:
+        return s
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+    s = s.replace("\r", "").replace("\n", "")
+    if "..." in s:
+        return s
+    # Remove accidental trailing punctuation from terminal copy/paste
+    s = s.rstrip(".,;")
+    return s
+
+
+def main():
+    dec = NexusCipherV12Decryptor()
+    print("=" * 60)
+    print("NEXUS-CIPHER(TM) v12.0 DECRYPTOR")
+    print("=" * 60)
+    while True:
+        user_input = input("\nPaste sealed message or file path (or 'quit'): ").strip()
+        if user_input.lower() == "quit":
+            break
+        if not user_input:
+            continue
+        try:
+            cleaned_input = normalize_ciphertext_input(user_input)
+            if "::" in cleaned_input:
+                sealed = cleaned_input
+            else:
+                sealed = extract_encrypted_message_from_file(cleaned_input)
+            plaintext = dec.decrypt(sealed)
+            print(f"\nDecrypted:\n{plaintext}")
+            print(f"Original length: {dec.original_length}")
+            print(f"Encryption timestamp: {dec.encryption_timestamp}")
+        except Exception as e:
+            msg = str(e)
+            if "Invalid sealed message format" in msg and "..." in cleaned_input:
+                msg = "Invalid sealed message format (input looks truncated; paste the full ciphertext, not a preview with '...')"
+            print(f"\nDecrypt failed: {msg}")
+
+
+if __name__ == "__main__":
+    main()
